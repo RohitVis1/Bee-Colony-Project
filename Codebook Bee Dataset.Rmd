@@ -1,0 +1,36 @@
+---
+title: "Codebook"
+author: "Rohit Viswanathan"
+date: "2024-03-07"
+output: html_document
+---
+
+state: state within the USA. Note, other is a collection of states for privacy reasons. And the United States state is the average across all states.
+
+num_colonies: number of honey bee colonies
+
+max_colonies: max number of honey bee colonies for that quarter
+
+lost_colonies: number of colonies that were lost during that quarter
+
+percent_lost: percentage of honey bee colonies lost during that quarter (lost_colonies/max_colonies)
+
+renovated_colonies: colonies that received new bees
+
+percent_renovated: percentage of honey bee colonies that were renovated
+
+quarter: Q1 is Jan to March (Winter), Q2 is April to June (Spring), Q3 is July to September (Summer), and Q4 is October to December (Autumn)
+
+year: year between 2015 and 2022
+
+varroa_mites: Percentage of colonies affected by a species of mite that affects honey bee populations
+
+other_pests_and_parasites: Percentage of colonies affected by a collection of other harmful critters
+
+diseases: Percentage of colonies affected by certain diseases
+
+pesticides: Percentage of colonies affected by the use of certain pesticides
+
+other: Percentage of colonies affected by an unlisted cause
+
+unknown: Percentage of colonies affected by an unknown cause

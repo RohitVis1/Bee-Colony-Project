@@ -1,0 +1,361 @@
+---
+title: "Full Final Project"
+author: "Rohit Viswanathan"
+date: "2024-03-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(MASS)
+library(parsnip)
+library(discrim)
+library(tidyverse)
+library(tidymodels)
+library(ggplot2)
+library(corrplot)
+library(dplyr)
+library(kknn)
+library(tidyr)
+bees <- read.csv('save_the_bees.csv')
+bees_pro <- bees[c(1,2,4,5,6,10,11,12,13,14,15,16,17)]
+```
+
+# Introduction
+
+Link to Dataset: https://www.kaggle.com/datasets/m000sey/save-the-honey-bees
+
+I got this data from Kaggle. The data itself was collected by the United States Department of Agriculture (USDA). The Kaggle User who created this dataset organized it to make it easier to work with. 
+
+```{r Bee Data}
+bees <- read.csv('save_the_bees.csv')
+
+head(bees)
+
+```
+This data-set is about the way bee colonies have changed every season since Winter of 2015 up until Autumn of 2022. Data that is included is the State/territory, the number of colonies at the end of that period and the maximum number of colonies during that period, number and percent of colonies lost, number and percent of colonies that were given new bees, the year, the season (1: Winter, 2: Spring, 3: Summer, 4: Fall), and the various dangers that the bee colonies faced. The question that I am interested in answering is how these various 'dangers'; mites, parasites, diseases, pesticides, and other dangers, impact the bee colonies and if it is reasonable to use these values to predict the percentage of colonies lost each season. This means that the response variable will be the percentage of bee colonies lost. The predictor variables will be the 'danger' columns. The percent lost column is actually the lost_colonies column divided by the max_colonies columns in this case.
+
+
+```{r cleaning}
+
+bees_pro <- bees[c(1,2,4,5,6,10,11,12,13,14,15,16,17)]
+
+n_distinct(bees_pro$state_code)
+table(bees_pro$state_code)
+
+
+```
+I have removed all of the columns that I deemed to be unnecessary to the question that I am attempting to answer. There are values in the state column that represent the entire country at the end of each season. I considered removing these rows but have decided to keep them in because the same process can be applied to these rows as the state rows so I thought that having a country-wide prediction would be useful as well. There are no missing values in this data-set, necessarily, but there are states that either do not have data or do not have bee colonies. For the states that are recorded, every state except for Hawaii has exactly 31 occurrences. Hawaii has 27. It can be presumed that data for Hawaii was not recorded for one year. 
+
+
+# Exploratory Data Analysis
+
+### Quarters
+
+```{r Histograms/Barplots}
+bees_q1 <- bees_pro[bees_pro$quarter == 1, ]
+bees_q2 <- bees_pro[bees_pro$quarter == 2, ]
+bees_q3 <- bees_pro[bees_pro$quarter == 3, ]
+bees_q4 <- bees_pro[bees_pro$quarter == 4, ]
+quarter_set <- data.frame(
+  quarter = c(1,2,3,4),
+  sum_max = c(sum(bees_q1$max_colonies)/1000000,sum(bees_q2$max_colonies)/1000000,
+          sum(bees_q3$max_colonies)/1000000,sum(bees_q4$max_colonies)/1000000),
+  sum_loss = c(sum(bees_q1$lost_colonies)/1000000,sum(bees_q2$lost_colonies)/1000000,
+          sum(bees_q3$lost_colonies)/1000000,sum(bees_q4$lost_colonies)/1000000)
+)
+
+ggplot(quarter_set, aes(x = factor(quarter), y = sum_max)) +
+  geom_bar(stat = "identity", fill = "red") +
+  labs(title = "Total Number of Max Colonies by Quarter",
+       x = "Quarter",
+       y = "Sums (in Millions)")
+
+
+
+ggplot(quarter_set, aes(x = factor(quarter), y = sum_loss)) +
+  geom_bar(stat = "identity", fill = "black") +
+  labs(title = "Number of Total Colonies lost by Quarter",
+       x = "Quarter",
+       y = "Sums (in Millions)")
+
+
+
+ggplot(bees_pro, aes(fill=year, y=lost_colonies, x=quarter)) + 
+    geom_bar(position="fill", stat="identity") +
+  ggtitle("Percentage of Contribution to Overall Loss each Year, per Season")+
+  labs (y = 'Percent Contribution to overall Loss', x = 'Quarter')
+
+
+```
+
+The first graph is relatively simple. It is the total number of colonies that existed during that quarter across all 8 years. I believe that it helps to add context to the next graph.
+
+The second graph is showing the total number of colonies lost across all years, for each quarter. Quarter 1 (Winter), and Quarter 4 (Fall) clearly have the highest loss rate while the warmer seasons have lower loss totals. This is potentially because of the number of flowers that need to be pollinated is lower during the colder seasons, so the bees have a harder time sustaining themselves.
+
+
+The third graph is displaying the percent of bee colonies lost each quarter. The whole bar represents every single colony that was lost in that quarter across all years. Each color on the bar represents a year ranging from 2015 to 2022. For example, in quarter 2, the year where the most colonies were lost was 2021. While there are no outlandishly large sections in this graph, there are noticeable properties. An example is the year 2022. 2022 has among the lowest contributions to losses for every season except the second season, or spring, where it had the highest contribution. Overall, this graph, along with the first and second graph, gives us insight into how every period shown in this dataset affects the overall bee colony population. 
+
+### Correlations between Predictors
+
+```{r correlations}
+corr_dangers <- cor(bees_pro[, c('percent_lost','varroa_mites', 'other_pests_and_parasites',
+                                 'diseases', 'pesticides', 'other', 'unknown')])
+corrplot(corr_dangers)
+```
+
+In the above correlation plot, the variables are each of the dangers that will serve as the predictors for percent_lost. I wanted to see how they correlate to each other and percent_lost. It is difficult to say how they will work together to predict percent_lost, but from this plot, it appears that none of these values have a high correlation with percent_lost. It is notable that every single value here is positive, even if the correlation is small. While this does not guarantee that one danger being more present results in another also being present, we can say that it is possible.
+
+### States
+
+```{r }
+
+
+bees_no_US <- bees_pro %>% 
+  filter(state_code != "US")
+
+avg_max <- bees_no_US %>%
+  group_by(state) %>%
+  summarize(avg_max_colonies = mean(max_colonies))
+
+avg_lost <- bees_no_US %>%
+  group_by(state) %>%
+  summarize(avg_lost_colonies = mean(lost_colonies))
+
+ggplot(avg_max, aes(x = state, y = avg_max_colonies)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  ggtitle("Average Maximum Colonies per State") +
+  labs(y = "Average Maximum Colonies", x = "State") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+ggplot(avg_lost, aes(x = state, y = avg_lost_colonies)) +
+  geom_bar(stat = "identity", fill = "red") +
+  ggtitle("Average Lost Colonies per State") +
+  labs(y = "Average Lost Colonies", x = "State") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_y_continuous(labels = function(x) format(x, scientific = FALSE))
+
+```
+
+For the first graph, I found the average number of maximum colonies by state. This was meant to understand which states had higher bee colonies and how they affected the data. California is far and away the state with the most colonies. 
+
+The second graph is very similar except for average lost colonies. Looking at both graphs, it is clear that they have nearly the same shape. This means that losing colonies happened at similar rates throughout the country, on average. 
+
+
+# Modeling
+
+### Splitting Data and Cross Validating
+
+``` {r Splitting}
+
+set.seed(45)
+bee_split <- initial_split(bees_pro, prop = 0.80, strata = percent_lost)
+bee_train <- training(bee_split)
+bee_test <- testing(bee_split)
+
+```
+
+Since the dataset was not too large, I decided to split it into 80 percent training data and 20 percent testing data. 
+
+``` {r recipe}
+# Cross Validation
+bee_folds <- vfold_cv(bee_train, v = 8)
+
+#Recipe
+bee_recipe <- recipe(percent_lost ~ varroa_mites + other_pests_and_parasites +
+                    diseases + pesticides + other + 
+                    unknown + state_code , data = bee_train) %>%
+  step_dummy(all_nominal_predictors()) 
+
+bee_recipe
+```
+I picked 8 folds for the cross validation because there are 8 years being predicted in this set, and I thought it would be interesting to split it up that way. 
+
+I picked the 6 'danger' variables to be my predictors. I also picked the state, specifically the state code, because I believe the state that the bee colony is in will make a difference in the overall predictions.
+
+### Model 1: Linear Regression
+
+``` {r linear}
+# Linear Regression
+bee_loss_lin <- linear_reg() %>%
+  set_engine("glm") 
+
+bee_loss_lin_wf <- workflow() %>%
+  add_recipe(bee_recipe) %>%
+  add_model(bee_loss_lin)
+
+bee_lin_fit <- fit(bee_loss_lin_wf, data = bee_train)
+
+lin_res<-fit_resamples(bee_loss_lin_wf, bee_folds)
+
+bee_loss_lin_test <- augment(bee_lin_fit, bee_test)
+```
+
+This is just a usual Linear Regression Model. 
+
+### Model 2: K-Nearest Neighbor
+
+``` {r KNN}
+
+# K-nearest Neighbors
+knn_grid <- grid_regular(neighbors(), levels = 10)
+
+bee_loss_knn <- nearest_neighbor(neighbor = tune()) %>%
+  set_engine("kknn") %>%
+  set_mode('regression')
+
+bee_loss_knn_wf <- workflow() %>%
+  add_recipe(bee_recipe) %>%
+  add_model(bee_loss_knn)
+
+bee_knn_fit <- fit(bee_loss_knn_wf, data = bee_train)
+
+# Tuning Grid
+bee_loss_knn_grid <- tune_grid(
+  bee_loss_knn_wf,
+  resamples = bee_folds,
+  grid = knn_grid
+)
+# Selecting Best Model from KNN
+best_knn <- select_best(bee_loss_knn_grid, metric = "rmse")
+
+final_knn <- finalize_workflow(bee_loss_knn_wf, best_knn)
+
+final_knn_fit <- fit(final_knn, bee_train)
+
+bee_loss_knn_test <- augment(final_knn_fit, bee_test)
+
+```
+
+K-nearest neighbors model. I tuned the model to see which neighbor value would perform the best. The value that performed the best was 10 neigbors. 
+
+### Model 3: Elastic Net Regression
+
+``` {r ELA}
+ela_grid <- expand.grid(
+  penalty = seq(0, 1, length.out = 10),
+  mixture = seq(0, 1, length.out = 10)
+)
+
+# Elastic
+bee_loss_ela <- linear_reg(penalty = tune(), mixture = tune()) %>%
+  set_engine("glmnet") %>%
+  set_mode("regression")
+
+bee_loss_ela_wf<-workflow()%>%
+  add_recipe(bee_recipe)%>%
+  add_model(bee_loss_ela)
+
+bee_ela_fit <- fit(bee_loss_ela_wf, data = bee_train)
+
+#Tuning Grid
+bee_loss_ela_grid <- tune_grid(
+  bee_loss_ela_wf,
+  resamples = bee_folds,
+  grid = ela_grid
+)
+# Selecting Best Model from ELA
+best_ela <- select_best(bee_loss_ela_grid, metric = "rmse")
+
+final_ela <- finalize_workflow(bee_loss_ela_wf, best_ela)
+
+final_ela_fit <- fit(final_ela, bee_train)
+
+bee_loss_ela_test <- augment(final_ela_fit, bee_test)
+
+```
+
+This is an Elastic Net Model. I tuned the penalty and mixture to see which would be best and the best model had a penalty of around 0.77 and a mixture of aroun 0.11.
+
+### Model 4: Random Forests
+
+```{r forest}
+# Random Forests
+bee_loss_forest <- rand_forest(mtry = tune(), 
+                           trees = tune(), 
+                           min_n = tune()) %>%
+  set_engine("ranger", importance = "impurity") %>% 
+  set_mode("regression")
+
+bee_loss_forest_wf <- workflow() %>% 
+  add_model(bee_loss_forest) %>% 
+  add_recipe(bee_recipe)
+
+
+forest_grid <- grid_regular(mtry(range = c(1, 8)), 
+                            trees(range = c(200, 600)),
+                            min_n(range = c(10, 20)),
+                            levels = 8)
+
+# Tuning Grid
+bee_loss_forest_grid <- tune_grid(
+  bee_loss_forest_wf, 
+  resamples = bee_folds, 
+  grid = forest_grid
+)
+
+best_forest <- select_best(bee_loss_forest_grid, metric = "rmse")
+
+final_forest <- finalize_workflow(bee_loss_forest_wf, best_forest)
+
+final_forest_fit <- fit(final_forest, bee_train)
+
+bee_loss_forest_test <- augment(final_forest_fit, bee_test)
+
+```
+
+This is a Random Forest Model. I tuned the mtry, trees, and min_n values. The best model had 1 mtry, 485 trees, and 11 min_n values. 
+
+## Comparing Models
+
+```{r Comparing}
+library(yardstick)
+library(dbplyr)
+met_set <- metric_set(rsq, rmse, mae)
+bee_loss_lin_test %>%
+  met_set(truth = percent_lost, estimate = .pred)
+
+bee_loss_knn_test %>%
+  met_set(truth = percent_lost, estimate = .pred)
+  
+bee_loss_ela_test %>%
+  met_set(truth = percent_lost, estimate = .pred)
+
+bee_loss_forest_test %>%
+  met_set(truth = percent_lost, estimate = .pred)
+  
+
+```
+Based on the r-squared values, and the Root Mean Squared Error's (rmse) of my models, the predictions were quite poor. Of the 4 models that I picked, the best was the random forest by a good amount. It had the lowest rmse at around 5.41 and the highest r^2 value at around 0.34. 
+
+## Predicting Testing Set
+
+```{r predictions}
+
+# Best Model was Random Forests, so I will use those predictions
+
+best_bee_pred <- bee_loss_forest_test[, c('state_code','year', 
+                                          'quarter', 'percent_lost', '.pred')]
+
+best_bee_pred
+
+```
+
+
+# Conclusion
+
+The best model was the random forest. Since it was the best model by a decent amount, I decided to only use this model to make my final predictions. Some of the predictions are completely off, but I believe that it is fair to say that many of the predictions are in the ballpark of what is correct. 
+
+```{r Conclusion}
+ggplot(best_bee_pred, aes(x = percent_lost, y = .pred)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(x = "Truth", y = "Predictions", title = "Real Percent Lost vs. Predictions")
+
+```
+
+Here is the plot of real values compared to the predicted values of the Random Forest model. The spread of the scatter-plot is another indication that the model, despite being the best one, performed quite poorly. 
+
+There are many reasons as to why the models did not perform up to expectations. The original question was how each of the 'danger' variables actually impacted the percent of colonies lost. While there are clear indications that they did impact the loss percentage for bee colonies, it is obvious that there were far more variables affecting the numbers, that are not accounted for in the dataset. Another possibility is the weighting of each of the predictors. I went with the assumption that each of the predictor values damaged the bee colony numbers equally. I did this because there was no indication that one was more devastating to the bee colonies than the others. I believe that there are a great many factors that will need to be researched further to better the predictions made. Returning to my original question, I believe that it is reasonable to use these predictors to predict bee colony loss, but also to accept that there are many other factors and possibilities that will need to be accounted for at some point as well. 
